@@ -1,0 +1,6 @@
+[submodule "randutils"]
+	path = randutils
+	url = https://gist.github.com/imneme/540829265469e673d045
+[submodule "pcg-cpp"]
+	path = pcg-cpp
+	url = https://github.com/imneme/pcg-cpp
