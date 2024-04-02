@@ -97,7 +97,7 @@ public:
   std::tuple<Real, Vector, Matrix> hamGradHess(const Vector& x) const {
     auto [H, dH, ddH] = HdHddH(x);
 
-    Vector gradH = dH - dH.dot(x) * x / N;
+    Vector gradH = dH - dH.dot(x) * x / (Real)N;
     Matrix hessH = ddH - (dH * x.transpose() + x.dot(dH) * Matrix::Identity(N, N) + (ddH * x) * x.transpose()) / (Real)N  + 2.0 * x * x.transpose();
 
     return {H, gradH, hessH};
@@ -171,7 +171,7 @@ int main(int argc, char* argv[]) {
 
   Rng r;
 
-  Model<1, 2> leastSquares(N, M, r.engine(), sqrt(2) * pow(σ, 2), sqrt(2));
+  Model<1, 2> leastSquares(N, M, r.engine(), σ, 1);
 
   Vector x = Vector::Zero(N);
   x(0) = sqrt(N);

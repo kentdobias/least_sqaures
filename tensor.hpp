@@ -88,7 +88,7 @@ Tensor<p> generateCouplings(unsigned N, unsigned M, Distribution d, Generator& r
 
 template <int p, class Generator>
 Tensor<p> generateRealPSpinCouplings(unsigned N, unsigned M, Generator& r) {
-  Real σp = sqrt(factorial(p-1) / ((Real)2 * pow(N, p - 1)));
+  Real σp = sqrt(factorial(p-1) / ((Real)pow(N, p - 1)));
 
   return generateCouplings<p>(N, M, std::normal_distribution<Real>(0, σp), r);
 }
