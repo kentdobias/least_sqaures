@@ -1,95 +1,91 @@
 #include <eigen3/Eigen/Dense>
 #include <getopt.h>
 
+#include <eigen3/unsupported/Eigen/CXX11/Tensor>
+
 #include "pcg-cpp/include/pcg_random.hpp"
 #include "randutils/randutils.hpp"
 
-#include "tensor.hpp"
+using Rng = randutils::random_generator<pcg32>;
 
-Vector normalize(const Vector& z) {
-  return z * sqrt((Real)z.size() / (Real)(z.transpose() * z));
+using Real = double;
+using Vector = Eigen::Matrix<Real, Eigen::Dynamic, 1>;
+using Matrix = Eigen::Matrix<Real, Eigen::Dynamic, Eigen::Dynamic>;
+
+/* Eigen tensor manipulations are quite annoying, especially with the need to convert other types
+ * into tensors beforehand. Here I overload multiplication operators to allow contraction between
+ * vectors and the first or last index of a tensor.
+ */
+class Tensor : public Eigen::Tensor<Real, 3> {
+  using Eigen::Tensor<Real, 3>::Tensor;
+
+public:
+  Matrix operator*(const Vector& x) const {
+    const std::array<Eigen::IndexPair<int>, 1> ip20 = {Eigen::IndexPair<int>(2, 0)};
+    const Eigen::Tensor<Real, 1> xT = Eigen::TensorMap<const Eigen::Tensor<Real, 1>>(x.data(), x.size());
+    const Eigen::Tensor<Real, 2> JxT = contract(xT, ip20);
+    return Eigen::Map<const Matrix>(JxT.data(), dimension(0), dimension(1));
+  }
+};
+
+Matrix operator*(const Eigen::Matrix<Real, 1, Eigen::Dynamic>& x, const Tensor& J) {
+  const std::array<Eigen::IndexPair<int>, 1> ip00 = {Eigen::IndexPair<int>(0, 0)};
+  const Eigen::Tensor<Real, 1> xT = Eigen::TensorMap<const Eigen::Tensor<Real, 1>>(x.data(), x.size());
+  const Eigen::Tensor<Real, 2> JxT = J.contract(xT, ip00);
+  return Eigen::Map<const Matrix>(JxT.data(), J.dimension(1), J.dimension(2));
 }
 
-template <int... ps>
-class Model {
+Vector normalize(const Vector& x) {
+  return x * sqrt((Real)x.size() / x.squaredNorm());
+}
+
+class QuadraticModel {
 private:
-  std::tuple<Tensor<ps>...> Js;
+  Tensor J;
+  Matrix A;
+  Vector b;
 
 public:
   unsigned N;
   unsigned M;
-  template <class Generator, typename... T>
-  Model(unsigned N, unsigned M, Generator& r, T... μs) : N(N), M(M) {
-    Js = std::make_tuple(μs * generateRealPSpinCouplings<ps>(N, M, r)...);
-  }
 
-  unsigned numPs() const {
-    return std::tuple_size(Js);
-  }
+  template <class Generator>
+  QuadraticModel(unsigned N, unsigned M, Generator& r, double μ1, double μ2, double μ3) : N(N), M(M), J(M, N, N), A(M, N), b(M) {
+    std::normal_distribution<Real> distribution(0, 1);
 
-private:
-  std::tuple<Vector, Matrix, Tensor<3>> hamGradTensorHelper(const Vector& z, const Tensor<1>& J) const {
-    Tensor<3> J3(N, N, M);;
-    J3.setZero();
-    Matrix Jz = Matrix::Zero(N, M);
-    Vector Jzz = Eigen::Map<const Vector>(J.data(), M);
-
-    return {Jzz, Jz, J3};
-  }
-
-  std::tuple<Vector, Matrix, Tensor<3>> hamGradTensorHelper(const Vector& z, const Tensor<2>& J) const {
-    Tensor<3> J3(N, N, M);;
-    J3.setZero();
-    Matrix Jz = Eigen::Map<const Matrix>(J.data(), N, M);
-    Vector Jzz = z.transpose() * Jz;
-
-    return {Jzz, Jz, J3};
-  }
-
-  template <int p>
-  std::tuple<Vector, Matrix, Tensor<3>> hamGradTensorHelper(const Vector z, const Tensor<p>& J) const {
-    Tensor<3> J3 = contractDown(J, z);
-    Tensor<1> zT = Eigen::TensorMap<constTensor<1>>(z.data(), N);
-    Tensor<2> J3zT = J3.contract(zT, ip00);
-    Matrix Jz = Eigen::Map<const Matrix>(J3zT.data(), N, M);
-    Vector Jzz = z.transpose() * Jz;
-
-    return {Jzz, Jz, J3};
-  }
-
-  template <int p, int... qs>
-  std::tuple<Vector, Matrix, Tensor<3>> hamGradHessHelper(const Vector& z, const Tensor<p>& J, const Tensor<qs>& ...Js) const {
-    auto [Jzz, Jz, J3] = hamGradTensorHelper(z, J);
-
-    Real pBang = factorial(p-1);
-
-    Tensor<3> ddH = ((p - 1) * p / pBang) * J3;
-    Matrix dH = (p / pBang) * Jz;
-    Vector H = Jzz / pBang;
-
-    if constexpr (sizeof...(Js) > 0) {
-      auto [Hs, dHs, ddHs] = hamGradHessHelper(z, Js...);
-      H += Hs;
-      dH += dHs;
-      ddH += ddHs;
+    for (unsigned i = 0; i < M; i++) {
+      for (unsigned j = 0; j < N; j++) {
+        for (unsigned k = 0; k < N; k++) {
+          J(i, j, k) = (2 * μ3 / N) * distribution(r);
+        }
+      }
     }
 
-    return {H, dH, ddH};
+    for (unsigned i = 0; i < M; i++) {
+      for (unsigned j = 0; j < N; j++) {
+        A(i, j) = (μ2 / sqrt(N)) * distribution(r);
+      }
+    }
+
+    for (unsigned i = 0; i < M; i++) {
+      b(i) = μ1 * distribution(r);
+    }
   }
 
-public:
-  std::tuple<Vector, Matrix, Tensor<3>> VdVddV(const Vector& z) const {
-    return std::apply([&z, this](const Tensor<ps>& ...Ks) -> std::tuple<Vector, Matrix, Tensor<3>> { return hamGradHessHelper(z, Ks...); }, Js);
+  std::tuple<Vector, Matrix, const Tensor&> VdVddV(const Vector& x) const {
+    Matrix Jx = J * x;
+    Vector V1 = (A + 0.5 * Jx) * x;
+    Matrix dV = A + Jx;
+
+    return {b + V1, dV, J};
   }
 
-  std::tuple<Real, Vector, Matrix> HdHddH(const Vector& z) const {
-    auto [V, dV, ddV] = VdVddV(z);
+  std::tuple<Real, Vector, Matrix> HdHddH(const Vector& x) const {
+    auto [V, dV, ddV] = VdVddV(x);
 
     Real H = 0.5 * V.squaredNorm();
-    Vector dH = dV * V;
-    Tensor<1> VT = Eigen::TensorMap<constTensor<1>>(V.data(), M);
-    Tensor<2> ddVzT = ddV.contract(VT, ip20);
-    Matrix ddH = Eigen::Map<const Matrix>(ddVzT.data(), N, N) + dV * dV.transpose();
+    Vector dH = V.transpose() * dV;
+    Matrix ddH = V.transpose() * ddV + dV.transpose() * dV;
 
     return {H, dH, ddH};
   }
@@ -103,7 +99,7 @@ public:
     return {H, gradH, hessH};
   }
 
-  Vector HessSpectrum(const Vector& x) const {
+  Vector spectrum(const Vector& x) const {
     Matrix hessH;
     std::tie(std::ignore, std::ignore, hessH) = hamGradHess(x);
     Eigen::EigenSolver<Matrix> eigenS(hessH);
@@ -111,24 +107,22 @@ public:
   }
 };
 
-template <int ...ps>
-Vector findMinimum(const Model<ps...>& M, const Vector& x0, Real ε) {
+Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε) {
   Vector x = x0;
   Real λ = 100;
 
   auto [H, g, m] = M.hamGradHess(x0);
 
   while (g.norm() / x.size() > ε && λ < 1e8) {
-    Vector dz = (m + λ * (Matrix)abs(m.diagonal().array()).matrix().asDiagonal()).partialPivLu().solve(g);
-    dz -= x.dot(dz) * x / M.N;
-    Vector zNew = normalize(x - dz);
+    Vector dx = (m + λ * (Matrix)abs(m.diagonal().array()).matrix().asDiagonal()).partialPivLu().solve(g);
+    dx -= x.dot(dx) * x / M.N;
+    Vector xNew = normalize(x - dx);
 
-    auto [HNew, gNew, mNew] = M.hamGradHess(zNew);
+    auto [HNew, gNew, mNew] = M.hamGradHess(xNew);
 
     if (HNew * 1.0001 <= H) {
-      x = zNew;
+      x = xNew;
       H = HNew;
-
       g = gNew;
       m = mNew;
 
@@ -141,17 +135,16 @@ Vector findMinimum(const Model<ps...>& M, const Vector& x0, Real ε) {
   return x;
 }
 
-using Rng = randutils::random_generator<pcg32>;
-using Real = double;
-
 int main(int argc, char* argv[]) {
   unsigned N = 10;
   Real α = 1;
   Real σ = 1;
+  Real A = 1;
+  Real J = 1;
 
   int opt;
 
-  while ((opt = getopt(argc, argv, "N:a:s:")) != -1) {
+  while ((opt = getopt(argc, argv, "N:a:s:A:J:")) != -1) {
     switch (opt) {
     case 'N':
       N = (unsigned)atof(optarg);
@@ -162,6 +155,12 @@ int main(int argc, char* argv[]) {
     case 's':
       σ = atof(optarg);
       break;
+    case 'A':
+      A = atof(optarg);
+      break;
+    case 'J':
+      J = atof(optarg);
+      break;
     default:
       exit(1);
     }
@@ -171,7 +170,7 @@ int main(int argc, char* argv[]) {
 
   Rng r;
 
-  Model<1, 2> leastSquares(N, M, r.engine(), σ, 1);
+  QuadraticModel leastSquares(N, M, r.engine(), σ, A, J);
 
   Vector x = Vector::Zero(N);
   x(0) = sqrt(N);
@@ -185,7 +184,7 @@ int main(int argc, char* argv[]) {
   std::tie(energy, std::ignore, std::ignore) = leastSquares.hamGradHess(xMin);
 
   std::cout << energy / N << std::endl;
-  std::cout << leastSquares.HessSpectrum(xMin)(1) / N << std::endl;
+  std::cout << leastSquares.spectrum(xMin)(1) / N << std::endl;
 
   return 0;
 }
