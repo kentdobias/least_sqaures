@@ -1,15 +1,13 @@
 #include <eigen3/Eigen/Dense>
-#include <getopt.h>
-
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
-#include <random>
+#include <getopt.h>
 
 #include "pcg-cpp/include/pcg_random.hpp"
 #include "randutils/randutils.hpp"
 
 using Rng = randutils::random_generator<pcg32>;
 
-using Real = double;
+using Real = float;
 using Vector = Eigen::Matrix<Real, Eigen::Dynamic, 1>;
 using Matrix = Eigen::Matrix<Real, Eigen::Dynamic, Eigen::Dynamic>;
 
@@ -97,31 +95,29 @@ private:
 
 public:
   QuadraticModel(unsigned N, unsigned M, Rng& r, double μ1, double μ2, double μ3) : Model(N, M), J(M, N, N), A(M, N), b(M) {
-    for (unsigned i = 0; i < M; i++) {
+    for (unsigned k = 0; k < N; k++) {
       for (unsigned j = 0; j < N; j++) {
-        for (unsigned k = 0; k < N; k++) {
-          J(i, j, k) = (2 * μ3 / N) * r.variate<Real, std::normal_distribution>();
+        for (unsigned i = 0; i < M; i++) {
+          J(i, j, k) = r.variate<Real, std::normal_distribution>(0, 2 * μ3 / N);
         }
       }
     }
 
-    for (unsigned i = 0; i < M; i++) {
-      for (unsigned j = 0; j < N; j++) {
-        A(i, j) = (μ2 / sqrt(N)) * r.variate<Real, std::normal_distribution>();
-      }
+    for (Real& Aij : A.reshaped()) {
+      Aij = r.variate<Real, std::normal_distribution>(0, μ2 / sqrt(N));
     }
 
-    for (unsigned i = 0; i < M; i++) {
-      b(i) = μ1 * r.variate<Real, std::normal_distribution>();
+    for (Real& bi : b) {
+      bi = r.variate<Real, std::normal_distribution>(0, μ1);
     }
   }
 
   std::tuple<Vector, Matrix, const Tensor&> VdVddV(const Vector& x) const {
     Matrix Jx = J * x;
-    Vector V1 = (A + 0.5 * Jx) * x;
+    Vector V = b + (A + 0.5 * Jx) * x;
     Matrix dV = A + Jx;
 
-    return {b + V1, dV, J};
+    return {V, dV, J};
   }
 
   std::tuple<Real, Vector, Matrix> HdHddH(const Vector& x) const override {
@@ -154,22 +150,20 @@ public:
       }
     }
 
-    for (unsigned i = 0; i < M; i++) {
+    for (unsigned k = 0; k < N; k++) {
       for (unsigned j = 0; j < N; j++) {
-        for (unsigned k = 0; k < N; k++) {
-          J2(i, j, k) = (2 * μ3 / N) * r.variate<Real, std::normal_distribution>();
+        for (unsigned i = 0; i < M; i++) {
+          J2(i, j, k) = r.variate<Real, std::normal_distribution>(0, 2 * μ3 / N);
         }
       }
     }
 
-    for (unsigned i = 0; i < M; i++) {
-      for (unsigned j = 0; j < N; j++) {
-        A(i, j) = (μ2 / sqrt(N)) * r.variate<Real, std::normal_distribution>();
-      }
+    for (Real& Aij : A.reshaped()) {
+      Aij = r.variate<Real, std::normal_distribution>(0, μ2 / sqrt(N));
     }
 
-    for (unsigned i = 0; i < M; i++) {
-      b(i) = μ1 * r.variate<Real, std::normal_distribution>();
+    for (Real& bi : b) {
+      bi = r.variate<Real, std::normal_distribution>(0, μ1);
     }
   }
 
@@ -195,20 +189,20 @@ public:
   }
 };
 
-Vector findMinimum(const Model& M, const Vector& x0, Real ε) {
+Vector findMinimum(const Model& M, const Vector& x0, Real ε = 1e-12) {
   Vector x = x0;
   Real λ = 100;
 
   auto [H, g, m] = M.hamGradHess(x0);
 
-  while (g.norm() / x.size() > ε && λ < 1e8) {
-    Vector dx = (m + λ * (Matrix)abs(m.diagonal().array()).matrix().asDiagonal()).partialPivLu().solve(g);
+  while (g.norm() / M.N > ε && λ < 1e8) {
+    Vector dx = (m + λ * (Matrix)m.diagonal().cwiseAbs().asDiagonal()).partialPivLu().solve(g);
     dx -= x.dot(dx) * x / M.N;
     Vector xNew = normalize(x - dx);
 
     auto [HNew, gNew, mNew] = M.hamGradHess(xNew);
 
-    if (HNew * 1.0001 <= H) {
+    if (HNew < H) {
       x = xNew;
       H = HNew;
       g = gNew;
@@ -258,10 +252,13 @@ int main(int argc, char* argv[]) {
   Real σ = 1;
   Real A = 1;
   Real J = 1;
+  Real β = 1;
+  unsigned sweeps = 10;
+  unsigned samples = 10;
 
   int opt;
 
-  while ((opt = getopt(argc, argv, "N:a:s:A:J:")) != -1) {
+  while ((opt = getopt(argc, argv, "N:a:s:A:J:b:S:n:")) != -1) {
     switch (opt) {
     case 'N':
       N = (unsigned)atof(optarg);
@@ -278,6 +275,15 @@ int main(int argc, char* argv[]) {
     case 'J':
       J = atof(optarg);
       break;
+    case 'b':
+      β = atof(optarg);
+      break;
+    case 'S':
+      sweeps = atoi(optarg);
+      break;
+    case 'n':
+      samples = atoi(optarg);
+      break;
     default:
       exit(1);
     }
@@ -287,28 +293,21 @@ int main(int argc, char* argv[]) {
 
   Rng r;
 
-  QuadraticModel leastSquares(N, M, r, σ, A, J);
+  Vector x = Vector::Zero(N);
+  x(0) = sqrt(N);
 
-  Vector x0 = Vector::Zero(N);
-  x0(0) = sqrt(N);
+  std::cout << N << " " << α << " " << β;
 
-  std::cout << leastSquares.getHamiltonian(x0) / N << std::endl;
-
-  Vector xMin1 = findMinimum(leastSquares, x0, 1e-12);
-
-  std::cout << leastSquares.getHamiltonian(xMin1) / N << std::endl;
-
-  Vector x = x0;
-
-  for (unsigned i = 0; i < 10; i++) {
-    x = metropolisSweep(leastSquares, x, 0.5, r);
+  for (unsigned sample = 0; sample < samples; sample++) {
+    QuadraticModel leastSquares(N, M, r, σ, A, J);
+    for (unsigned i = 0; i < sweeps; i++) {
+      x = metropolisSweep(leastSquares, x, β, r);
+    }
+    x = findMinimum(leastSquares, x);
+    std::cout << " " << leastSquares.getHamiltonian(x) / N;
   }
 
-  std::cout << leastSquares.getHamiltonian(x) / N << std::endl;
-
-  Vector xMin2 = findMinimum(leastSquares, x, 1e-12);
-
-  std::cout << leastSquares.getHamiltonian(xMin2) / N << std::endl;
+  std::cout << std::endl;
 
   return 0;
 }
