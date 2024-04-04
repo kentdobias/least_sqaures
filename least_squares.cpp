@@ -73,7 +73,7 @@ public:
     return {H, gradH, hessH};
   }
 
-  Real getHamiltonian(const Vector& x) const {
+  virtual Real getHamiltonian(const Vector& x) const {
     Real H;
     std::tie(H, std::ignore, std::ignore) = HdHddH(x);
     return H;
@@ -128,6 +128,15 @@ public:
     Matrix ddH = V.transpose() * ddV + dV.transpose() * dV;
 
     return {H, dH, ddH};
+  }
+
+  /* Unfortunately benchmarking indicates that ignorning entries of a returned tuple doesn't result
+   * in those execution paths getting optimized out. It is much more efficient to compute the
+   * energy alone when only the energy is needed.
+   */
+  Real getHamiltonian(const Vector& x) const override {
+    Vector V = b + (A + 0.5 * (J * x)) * x;
+    return 0.5 * V.squaredNorm();
   }
 };
 
@@ -217,30 +226,36 @@ Vector findMinimum(const Model& M, const Vector& x0, Real ε = 1e-12) {
   return x;
 }
 
-Vector metropolisStep(const Model& M, const Vector& x0, Real β, Rng& r, Real ε = 1) {
-  Vector Δx(M.N);
-
-  for (Real& Δxᵢ : Δx) {
-    Δxᵢ = ε * r.variate<Real, std::normal_distribution>();
-  }
-
-  Vector xNew = normalize(x0 + Δx);
-
-  Real Hold = M.getHamiltonian(x0);
-  Real Hnew = M.getHamiltonian(xNew);
-
-  if (exp(-β * (Hnew - Hold)) > r.uniform<Real>(0.0, 0.1)) {
-    return xNew;
-  } else {
-    return x0;
-  }
-}
-
-Vector metropolisSweep(const Model& M, const Vector& x0, Real β, Rng& r, Real ε = 1) {
+Vector metropolisSweep(const Model& M, const Vector& x0, Real β, Rng& r, unsigned sweeps = 1, Real ε = 1) {
   Vector x = x0;
+  Real H = M.getHamiltonian(x);
 
-  for (unsigned i = 0; i < M.N; i++) {
-    x = metropolisStep(M, x, β, r, ε);
+  for (unsigned j = 0; j < sweeps; j++) {
+    Real rate = 0;
+
+    for (unsigned i = 0; i < M.N; i++) {
+      Vector xNew = x;
+
+      for (Real& xNewᵢ : xNew) {
+        xNewᵢ += ε * r.variate<Real, std::normal_distribution>();
+      }
+
+      xNew = normalize(xNew);
+
+      Real Hnew = M.getHamiltonian(xNew);
+
+      if (exp(-β * (Hnew - H)) > r.uniform<Real>(0.0, 0.1)) {
+        x = xNew;
+        H = Hnew;
+        rate++;
+      }
+    }
+
+    if (rate / M.N < 0.5) {
+      ε /= 1.5;
+    } else {
+      ε *= 1.5;
+    }
   }
 
   return x;
@@ -300,9 +315,7 @@ int main(int argc, char* argv[]) {
 
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
-    for (unsigned i = 0; i < sweeps; i++) {
-      x = metropolisSweep(leastSquares, x, β, r);
-    }
+    x = metropolisSweep(leastSquares, x, β, r, sweeps);
     x = findMinimum(leastSquares, x);
     std::cout << " " << leastSquares.getHamiltonian(x) / N;
   }
