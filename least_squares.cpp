@@ -1,5 +1,6 @@
 #include <eigen3/Eigen/Dense>
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
+#include <eigen3/unsupported/Eigen/CXX11/TensorSymmetry>
 #include <getopt.h>
 
 #include "pcg-cpp/include/pcg_random.hpp"
@@ -7,7 +8,7 @@
 
 using Rng = randutils::random_generator<pcg32>;
 
-using Real = float;
+using Real = double;
 using Vector = Eigen::Matrix<Real, Eigen::Dynamic, 1>;
 using Matrix = Eigen::Matrix<Real, Eigen::Dynamic, Eigen::Dynamic>;
 
@@ -25,10 +26,6 @@ public:
     const Eigen::Tensor<Real, 2> JxT = contract(xT, ip20);
     return Eigen::Map<const Matrix>(JxT.data(), dimension(0), dimension(1));
   }
-
-  Tensor operator+(const Eigen::Tensor<Real, 3>& J) const {
-    return Eigen::Tensor<Real, 3>::operator+(J);
-  }
 };
 
 Matrix operator*(const Eigen::Matrix<Real, 1, Eigen::Dynamic>& x, const Tensor& J) {
@@ -38,67 +35,41 @@ Matrix operator*(const Eigen::Matrix<Real, 1, Eigen::Dynamic>& x, const Tensor& 
   return Eigen::Map<const Matrix>(JxT.data(), J.dimension(1), J.dimension(2));
 }
 
-class Tensor4 : public Eigen::Tensor<Real, 4> {
-  using Eigen::Tensor<Real, 4>::Tensor;
-
-public:
-  Eigen::Tensor<Real, 3> operator*(const Vector& x) const {
-    const std::array<Eigen::IndexPair<int>, 1> ip30 = {Eigen::IndexPair<int>(3, 0)};
-    const Eigen::Tensor<Real, 1> xT = Eigen::TensorMap<const Eigen::Tensor<Real, 1>>(x.data(), x.size());
-    return contract(xT, ip30);
-  }
-};
-
 Vector normalize(const Vector& x) {
   return x * sqrt((Real)x.size() / x.squaredNorm());
 }
 
-class Model {
-public:
-  unsigned N;
-  unsigned M;
+Vector makeTangent(const Vector& v, const Vector& x) {
+  return v - (v.dot(x) / x.squaredNorm()) * x;
+}
 
-  Model(unsigned N, unsigned M) : N(N), M(M) {}
+Real HFromV(const Vector& V) {
+  return 0.5 * V.squaredNorm();
+}
 
-  virtual std::tuple<Real, Vector, Matrix> HdHddH(const Vector& x) const {
-    return {0, Vector::Zero(N), Matrix::Zero(N, N)};
-  }
+Vector dHFromVdV(const Vector& V, const Matrix& dV) {
+  return V.transpose() * dV;
+}
 
-  std::tuple<Real, Vector, Matrix> hamGradHess(const Vector& x) const {
-    auto [H, dH, ddH] = HdHddH(x);
+Vector VFromABJ(const Vector& b, const Matrix& A, const Matrix& Jx, const Vector& x) {
+  return b + (A + 0.5 * Jx) * x;
+}
 
-    Vector gradH = dH - dH.dot(x) * x / (Real)N;
-    Matrix hessH = ddH - (dH * x.transpose() + x.dot(dH) * Matrix::Identity(N, N) + (ddH * x) * x.transpose()) / (Real)N  + 2.0 * x * x.transpose();
-
-    return {H, gradH, hessH};
-  }
-
-  virtual Real getHamiltonian(const Vector& x) const {
-    Real H;
-    std::tie(H, std::ignore, std::ignore) = HdHddH(x);
-    return H;
-  }
-
-  Vector spectrum(const Vector& x) const {
-    Matrix hessH;
-    std::tie(std::ignore, std::ignore, hessH) = hamGradHess(x);
-    Eigen::EigenSolver<Matrix> eigenS(hessH);
-    return eigenS.eigenvalues().real();
-  }
-};
-
-class QuadraticModel : public Model {
+class QuadraticModel {
 private:
   Tensor J;
   Matrix A;
   Vector b;
 
 public:
-  QuadraticModel(unsigned N, unsigned M, Rng& r, double μ1, double μ2, double μ3) : Model(N, M), J(M, N, N), A(M, N), b(M) {
+  unsigned N;
+  unsigned M;
+  QuadraticModel(unsigned N, unsigned M, Rng& r, double μ1, double μ2, double μ3) : N(N), M(M), J(M, N, N), A(M, N), b(M) {
+    Eigen::StaticSGroup<Eigen::Symmetry<1,2>> ssym1;
     for (unsigned k = 0; k < N; k++) {
-      for (unsigned j = 0; j < N; j++) {
+      for (unsigned j = k; j < N; j++) {
         for (unsigned i = 0; i < M; i++) {
-          J(i, j, k) = r.variate<Real, std::normal_distribution>(0, 2 * μ3 / N);
+          ssym1(J, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2) * μ3 / N);
         }
       }
     }
@@ -114,17 +85,17 @@ public:
 
   std::tuple<Vector, Matrix, const Tensor&> VdVddV(const Vector& x) const {
     Matrix Jx = J * x;
-    Vector V = b + (A + 0.5 * Jx) * x;
+    Vector V = VFromABJ(b, A, Jx, x);
     Matrix dV = A + Jx;
 
     return {V, dV, J};
   }
 
-  std::tuple<Real, Vector, Matrix> HdHddH(const Vector& x) const override {
+  std::tuple<Real, Vector, Matrix> HdHddH(const Vector& x) const {
     auto [V, dV, ddV] = VdVddV(x);
 
-    Real H = 0.5 * V.squaredNorm();
-    Vector dH = V.transpose() * dV;
+    Real H = HFromV(V);
+    Vector dH = dHFromVdV(V, dV);
     Matrix ddH = V.transpose() * ddV + dV.transpose() * dV;
 
     return {H, dH, ddH};
@@ -134,99 +105,114 @@ public:
    * in those execution paths getting optimized out. It is much more efficient to compute the
    * energy alone when only the energy is needed.
    */
-  Real getHamiltonian(const Vector& x) const override {
-    Vector V = b + (A + 0.5 * (J * x)) * x;
-    return 0.5 * V.squaredNorm();
+  Real getHamiltonian(const Vector& x) const {
+    return HFromV(VFromABJ(b, A, J * x, x));
+  }
+
+  std::tuple<Real, Vector> getHamGrad(const Vector& x) const {
+    Vector V;
+    Matrix dV;
+    std::tie(V, dV, std::ignore) = VdVddV(x);
+
+    Real H = HFromV(V);
+    Vector dH = makeTangent(dHFromVdV(V, dV), x);
+
+    return {H, dH};
+  }
+
+  std::tuple<Real, Vector, Matrix> hamGradHess(const Vector& x) const {
+    auto [H, dH, ddH] = HdHddH(x);
+
+    Real dHx = dH.dot(x) / N;
+
+    Vector gradH = dH - dHx * x;
+    Matrix hessH = ddH - dHx * Matrix::Identity(N, N) - ((dH + ddH * x) / N - 2 * x) * x.transpose();
+
+    return {H, gradH, hessH};
+  }
+
+  Vector spectrum(const Vector& x) const {
+    Matrix hessH;
+    std::tie(std::ignore, std::ignore, hessH) = hamGradHess(x);
+    Eigen::EigenSolver<Matrix> eigenS(hessH);
+    return eigenS.eigenvalues().real();
   }
 };
 
-class CubicModel : public Model {
-private:
-  Tensor4 J3;
-  Tensor J2;
-  Matrix A;
-  Vector b;
+Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-7) {
+  Vector x = x0;
+  Real λ = 10;
 
-public:
-  CubicModel(unsigned N, unsigned M, Rng& r, double μ1, double μ2, double μ3, double μ4) : Model(N, M), J3(M, N, N, N), J2(M, N, N), A(M, N), b(M) {
-    for (unsigned i = 0; i < M; i++) {
-      for (unsigned j = 0; j < N; j++) {
-        for (unsigned k = 0; k < N; k++) {
-          for (unsigned l = 0; l < N; l++) {
-            J3(i, j, k, l) = (6 * μ4 / pow(N, 1.5)) * r.variate<Real, std::normal_distribution>();
-          }
-        }
-      }
+  auto [H, g] = M.getHamGrad(x);
+
+  while (g.norm() / M.N > ε && λ > ε) {
+    Real HNew;
+    Vector xNew, gNew;
+
+    while(
+      xNew = normalize(x + λ * g),
+      std::tie(HNew, gNew) = M.getHamGrad(xNew),
+      HNew < H && λ > ε
+    ) {
+      λ /= 1.5;
     }
 
-    for (unsigned k = 0; k < N; k++) {
-      for (unsigned j = 0; j < N; j++) {
-        for (unsigned i = 0; i < M; i++) {
-          J2(i, j, k) = r.variate<Real, std::normal_distribution>(0, 2 * μ3 / N);
-        }
-      }
-    }
+    x = xNew;
+    H = HNew;
+    g = gNew;
 
-    for (Real& Aij : A.reshaped()) {
-      Aij = r.variate<Real, std::normal_distribution>(0, μ2 / sqrt(N));
-    }
-
-    for (Real& bi : b) {
-      bi = r.variate<Real, std::normal_distribution>(0, μ1);
-    }
+    λ *= 2;
   }
 
+  return x;
+}
 
-  std::tuple<Vector, Matrix, Tensor> VdVddV(const Vector& x) const {
-    Tensor J3x = J3 * x;
-    Matrix J3xx = J3x * x;
-    Matrix J2x = J2 * x;
-    Vector V1 = (A + 0.5 * J2x + J3xx / 6.0) * x;
-    Matrix dV = A + J2x + 0.5 * J3xx;
-
-    return {b + V1, dV, J2 + J3x};
-  }
-
-  std::tuple<Real, Vector, Matrix> HdHddH(const Vector& x) const override {
-    auto [V, dV, ddV] = VdVddV(x);
-
-    Real H = 0.5 * V.squaredNorm();
-    Vector dH = V.transpose() * dV;
-    Matrix ddH = V.transpose() * ddV + dV.transpose() * dV;
-
-    return {H, dH, ddH};
-  }
-};
-
-Vector findMinimum(const Model& M, const Vector& x0, Real ε = 1e-12) {
+Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-12) {
   Vector x = x0;
   Real λ = 100;
 
   auto [H, g, m] = M.hamGradHess(x0);
 
-  while (g.norm() / M.N > ε && λ < 1e8) {
-    Vector dx = (m + λ * (Matrix)m.diagonal().cwiseAbs().asDiagonal()).partialPivLu().solve(g);
-    dx -= x.dot(dx) * x / M.N;
-    Vector xNew = normalize(x - dx);
+  while (g.norm() / M.N > ε && λ * ε < 1) {
+    while (λ * ε < 1) {
+      Vector dx = (m - λ * (Matrix)m.diagonal().cwiseAbs().asDiagonal()).partialPivLu().solve(g);
+      dx -= x.dot(dx) * x / M.N;
+      Vector xNew = normalize(x - dx);
 
-    auto [HNew, gNew, mNew] = M.hamGradHess(xNew);
+      auto [HNew, gNew, mNew] = M.hamGradHess(xNew);
 
-    if (HNew < H) {
-      x = xNew;
-      H = HNew;
-      g = gNew;
-      m = mNew;
+      if (HNew > H) {
+        x = xNew;
+        H = HNew;
+        g = gNew;
+        m = mNew;
 
-      λ /= 2;
-    } else {
-      λ *= 1.5;
+        λ /= 2;
+        break;
+      } else {
+        λ *= 1.5;
+      }
     }
   }
 
   return x;
 }
 
-Vector metropolisSweep(const Model& M, const Vector& x0, Real β, Rng& r, unsigned sweeps = 1, Real ε = 1) {
+Vector findSaddle(const QuadraticModel& M, const Vector& x0, Real ε = 1e-12) {
+  Vector x = x0;
+  Vector g;
+  Matrix m;
+
+  while (std::tie(std::ignore, g, m) = M.hamGradHess(x), g.norm() / M.N > ε) {
+    Vector dx = m.partialPivLu().solve(g);
+    dx -= (x.dot(dx) / M.N) * x;
+    x = normalize(x - dx);
+  }
+
+  return x;
+}
+
+Vector metropolisSweep(const QuadraticModel& M, const Vector& x0, Real β, Rng& r, unsigned sweeps = 1, Real ε = 1) {
   Vector x = x0;
   Real H = M.getHamiltonian(x);
 
@@ -316,6 +302,7 @@ int main(int argc, char* argv[]) {
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
     x = metropolisSweep(leastSquares, x, β, r, sweeps);
+    std::cout << " " << leastSquares.getHamiltonian(x) / N;
     x = findMinimum(leastSquares, x);
     std::cout << " " << leastSquares.getHamiltonian(x) / N;
   }
