@@ -40,7 +40,7 @@ Vector normalize(const Vector& x) {
 }
 
 Vector makeTangent(const Vector& v, const Vector& x) {
-  return v - (v.dot(x) / x.squaredNorm()) * x;
+  return v - (v.dot(x) / x.size()) * x;
 }
 
 Real HFromV(const Vector& V) {
@@ -167,31 +167,24 @@ Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-7
   return x;
 }
 
-Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-12) {
+Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
   Vector x = x0;
   Real λ = 100;
 
   auto [H, g, m] = M.hamGradHess(x0);
 
-  while (g.norm() / M.N > ε && λ * ε < 1) {
-    while (λ * ε < 1) {
-      Vector dx = (m - λ * (Matrix)m.diagonal().cwiseAbs().asDiagonal()).partialPivLu().solve(g);
-      dx -= x.dot(dx) * x / M.N;
-      Vector xNew = normalize(x - dx);
+  while (λ * ε < 1) {
+    Vector dx = (m - λ * (Matrix)m.diagonal().cwiseAbs().asDiagonal()).partialPivLu().solve(g);
+    Vector xNew = normalize(x - makeTangent(dx, x));
+    Real HNew = M.getHamiltonian(xNew);
 
-      auto [HNew, gNew, mNew] = M.hamGradHess(xNew);
+    if (HNew > H) {
+      x = xNew;
+      std::tie(H, g, m) = M.hamGradHess(xNew);
 
-      if (HNew > H) {
-        x = xNew;
-        H = HNew;
-        g = gNew;
-        m = mNew;
-
-        λ /= 2;
-        break;
-      } else {
-        λ *= 1.5;
-      }
+      λ /= 2;
+    } else {
+      λ *= 1.5;
     }
   }
 
@@ -301,10 +294,11 @@ int main(int argc, char* argv[]) {
 
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
-    x = metropolisSweep(leastSquares, x, β, r, sweeps);
-    std::cout << " " << leastSquares.getHamiltonian(x) / N;
+    if (β != 0) {
+      x = metropolisSweep(leastSquares, x, β, r, sweeps);
+    }
     x = findMinimum(leastSquares, x);
-    std::cout << " " << leastSquares.getHamiltonian(x) / N;
+    std::cout << " " << leastSquares.getHamiltonian(x) / N << std::flush;
   }
 
   std::cout << std::endl;
