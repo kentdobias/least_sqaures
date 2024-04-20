@@ -44,11 +44,7 @@ Vector normalize(const Vector& x) {
 }
 
 Vector makeTangent(const Vector& v, const Vector& x) {
-  return v - (v.dot(x) / x.size()) * x;
-}
-
-Matrix projectionOperator(const Vector& x) {
-  return Matrix::Identity(x.size(), x.size()) - (x * x.transpose()) / x.squaredNorm();
+  return v - (v.dot(x) / x.squaredNorm()) * x;
 }
 
 Real HFromV(const Vector& V) {
@@ -197,56 +193,6 @@ Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
   return x;
 }
 
-Vector findSaddle(const QuadraticModel& M, const Vector& x0, Real ε = 1e-12) {
-  Vector x = x0;
-  Vector dx, g;
-  Matrix m;
-
-  while (
-    std::tie(std::ignore, g, m) = M.hamGradHess(x),
-    dx = makeTangent(m.partialPivLu().solve(g), x),
-    dx.norm() > ε) {
-    x = normalize(x - dx);
-  }
-
-  return x;
-}
-
-Vector metropolisSweep(const QuadraticModel& M, const Vector& x0, Real β, Rng& r, unsigned sweeps = 1, Real δ = 1) {
-  Vector x = x0;
-  Real H = M.getHamiltonian(x);
-
-  for (unsigned j = 0; j < sweeps; j++) {
-    Real rate = 0;
-
-    for (unsigned i = 0; i < M.N; i++) {
-      Vector xNew = x;
-
-      for (Real& xNewᵢ : xNew) {
-        xNewᵢ += δ * r.variate<Real, std::normal_distribution>();
-      }
-
-      xNew = normalize(xNew);
-
-      Real Hnew = M.getHamiltonian(xNew);
-
-      if (exp(-β * (Hnew - H)) > r.uniform<Real>(0.0, 0.1)) {
-        x = xNew;
-        H = Hnew;
-        rate++;
-      }
-    }
-
-    if (rate / M.N < 0.5) {
-      δ /= 1.5;
-    } else {
-      δ *= 1.5;
-    }
-  }
-
-  return x;
-}
-
 Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k, unsigned m) {
   Vector σ = Vector::Zero(M.N);
   unsigned axis = r.variate<unsigned, std::uniform_int_distribution>(0, M.N - 1);
@@ -254,34 +200,6 @@ Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k, unsigned m) {
 
   for (unsigned i = 0; i < k; i++) {
     auto [H, dH] = M.getHamGrad(σ);
-//    Matrix mx = projectionOperator(σ);
-
-    /*
-    Matrix hessH = mx.transpose() * ddH * mx;
-
-    Vector v(M.N);
-    for (Real& vi : v) {
-      vi = r.variate<Real,std::normal_distribution>();
-    }
-    v = makeTangent(v, σ);
-    Real L = hessH.norm();
-    for (unsigned j = 0; j < m; j++) {
-      Vector vNew = (hessH + sqrt(L) * Matrix::Identity(M.N, M.N)) * v;
-      vNew = makeTangent(vNew, σ);
-      vNew = vNew / vNew.norm();
-      if ((v - vNew).norm() < 1e-6) {
-        std::cerr << "Stopped approximation after " << m << " steps" << std::endl;
-        v = vNew;
-        break;
-      }
-      v = vNew;
-    }
-
-    if (v.dot(dH) < 0) {
-      v = -v;
-    }
-    */
-
     Vector v = dH / dH.norm();
 
     σ += sqrt(M.N/k) * v;
@@ -344,9 +262,6 @@ int main(int argc, char* argv[]) {
 
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
-    if (β != 0) {
-      x = metropolisSweep(leastSquares, x, β, r, sweeps);
-    }
     x = findMinimum(leastSquares, x);
     std::cout << " " << leastSquares.getHamiltonian(x) / N << std::flush;
     QuadraticModel leastSquares2(N, M, r, σ, A, J);
