@@ -39,23 +39,16 @@ Matrix operator*(const Eigen::Matrix<Real, 1, Eigen::Dynamic>& x, const Tensor& 
   return Eigen::Map<const Matrix>(JxT.data(), J.dimension(1), J.dimension(2));
 }
 
-class Tensor4 : public Eigen::Tensor<Real, 4> {
-  using Eigen::Tensor<Real, 4>::Tensor;
-
-public:
-  Eigen::Tensor<Real, 3> operator*(const Vector& x) const {
-    const std::array<Eigen::IndexPair<int>, 1> ip30 = {Eigen::IndexPair<int>(3, 0)};
-    const Eigen::Tensor<Real, 1> xT = Eigen::TensorMap<const Eigen::Tensor<Real, 1>>(x.data(), x.size());
-    return contract(xT, ip30);
-  }
-};
-
 Vector normalize(const Vector& x) {
   return x * sqrt((Real)x.size() / x.squaredNorm());
 }
 
 Vector makeTangent(const Vector& v, const Vector& x) {
   return v - (v.dot(x) / x.size()) * x;
+}
+
+Matrix projectionOperator(const Vector& x) {
+  return Matrix::Identity(x.size(), x.size()) - (x * x.transpose()) / x.squaredNorm();
 }
 
 Real HFromV(const Vector& V) {
@@ -70,16 +63,40 @@ Vector VFromABJ(const Vector& b, const Matrix& A, const Matrix& Jx, const Vector
   return b + (A + 0.5 * Jx) * x;
 }
 
-class Model {
+class QuadraticModel {
+private:
+  Tensor J;
+  Matrix A;
+  Vector b;
+
 public:
   unsigned N;
   unsigned M;
+  QuadraticModel(unsigned N, unsigned M, Rng& r, double μ1, double μ2, double μ3) : N(N), M(M), J(M, N, N), A(M, N), b(M) {
+    Eigen::StaticSGroup<Eigen::Symmetry<1,2>> ssym1;
+    for (unsigned k = 0; k < N; k++) {
+      for (unsigned j = k; j < N; j++) {
+        for (unsigned i = 0; i < M; i++) {
+          ssym1(J, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2) * μ3 / N);
+        }
+      }
+    }
 
-  Model(unsigned N, unsigned M) : N(N), M(M) {}
+    for (Real& Aij : A.reshaped()) {
+      Aij = r.variate<Real, std::normal_distribution>(0, μ2 / sqrt(N));
+    }
 
-  virtual std::tuple<Vector, Matrix, Tensor> VdVddV(const Vector& x) const {
-    std::cerr << "VdVddV needs to be defined in your specialization of this class!" << std::endl;
-    return {Vector::Zero(M), Matrix::Zero(M, N), Tensor(M, N, N)};
+    for (Real& bi : b) {
+      bi = r.variate<Real, std::normal_distribution>(0, μ1);
+    }
+  }
+
+  std::tuple<Vector, Matrix, const Tensor&> VdVddV(const Vector& x) const {
+    Matrix Jx = J * x;
+    Vector V = VFromABJ(b, A, Jx, x);
+    Matrix dV = A + Jx;
+
+    return {V, dV, J};
   }
 
   std::tuple<Real, Vector, Matrix> HdHddH(const Vector& x) const {
@@ -112,10 +129,12 @@ public:
     return {H, gradH, hessH};
   }
 
-  virtual Real getHamiltonian(const Vector& x) const {
-    Real H;
-    std::tie(H, std::ignore, std::ignore) = HdHddH(x);
-    return H;
+  /* Unfortunately benchmarking indicates that ignorning entries of a returned tuple doesn't result
+   * in those execution paths getting optimized out. It is much more efficient to compute the
+   * energy alone when only the energy is needed.
+   */
+  Real getHamiltonian(const Vector& x) const {
+    return HFromV(VFromABJ(b, A, J * x, x));
   }
 
   Vector spectrum(const Vector& x) const {
@@ -126,103 +145,7 @@ public:
   }
 };
 
-class QuadraticModel : public Model{
-private:
-  Tensor J;
-  Matrix A;
-  Vector b;
-
-public:
-  QuadraticModel(unsigned N, unsigned M, Rng& r, double μ1, double μ2, double μ3) : Model(N, M), J(M, N, N), A(M, N), b(M) {
-    Eigen::StaticSGroup<Eigen::Symmetry<1,2>> ssym1;
-    for (unsigned k = 0; k < N; k++) {
-      for (unsigned j = k; j < N; j++) {
-        for (unsigned i = 0; i < M; i++) {
-          ssym1(J, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2) * μ3 / N);
-        }
-      }
-    }
-
-    for (Real& Aij : A.reshaped()) {
-      Aij = r.variate<Real, std::normal_distribution>(0, μ2 / sqrt(N));
-    }
-
-    for (Real& bi : b) {
-      bi = r.variate<Real, std::normal_distribution>(0, μ1);
-    }
-  }
-
-  std::tuple<Vector, Matrix, Tensor> VdVddV(const Vector& x) const override {
-    Matrix Jx = J * x;
-    Vector V = VFromABJ(b, A, Jx, x);
-    Matrix dV = A + Jx;
-
-    return {V, dV, J};
-  }
-
-  /* Unfortunately benchmarking indicates that ignorning entries of a returned tuple doesn't result
-   * in those execution paths getting optimized out. It is much more efficient to compute the
-   * energy alone when only the energy is needed.
-   */
-  Real getHamiltonian(const Vector& x) const override {
-    return HFromV(VFromABJ(b, A, J * x, x));
-  }
-};
-
-class CubicModel : public Model {
-private:
-  Tensor4 J3;
-  Tensor J2;
-  Matrix A;
-  Vector b;
-
-public:
-  CubicModel(unsigned N, unsigned M, Rng& r, double μ1, double μ2, double μ3, double μ4) : Model(N, M), J3(M, N, N, N), J2(M, N, N), A(M, N), b(M) {
-    Eigen::StaticSGroup<Eigen::Symmetry<1,2>, Eigen::Symmetry<2,3>> ssym2;
-    for (unsigned i = 0; i < M; i++) {
-      for (unsigned j = 0; j < N; j++) {
-        for (unsigned k = j; k < N; k++) {
-          for (unsigned l = k; l < N; l++) {
-            ssym2(J3, i, j, k, l) = (sqrt(6) * μ4 / pow(N, 1.5)) * r.variate<Real, std::normal_distribution>();
-          }
-        }
-      }
-    }
-
-    Eigen::StaticSGroup<Eigen::Symmetry<1,2>> ssym1;
-    for (unsigned k = 0; k < N; k++) {
-      for (unsigned j = k; j < N; j++) {
-        for (unsigned i = 0; i < M; i++) {
-          ssym1(J2, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2) * μ3 / N);
-        }
-      }
-    }
-
-    for (Real& Aij : A.reshaped()) {
-      Aij = r.variate<Real, std::normal_distribution>(0, μ2 / sqrt(N));
-    }
-
-    for (Real& bi : b) {
-      bi = r.variate<Real, std::normal_distribution>(0, μ1);
-    }
-  }
-
-  std::tuple<Vector, Matrix, Tensor> VdVddV(const Vector& x) const override {
-    Tensor J3x = J3 * x;
-    Matrix J3xx = J3x * x;
-    Matrix J2x = J2 * x;
-    Vector V1 = (A + 0.5 * J2x + J3xx / 6.0) * x;
-    Matrix dV = A + J2x + 0.5 * J3xx;
-
-    return {b + V1, dV, J2 + J3x};
-  }
-
-  Real getHamiltonian(const Vector& x) const override {
-    return HFromV(VFromABJ(b, A, J2 * x + ((Tensor)(J3 * x) * x) / 3.0, x));
-  }
-};
-
-Vector gradientDescent(const Model& M, const Vector& x0, Real ε = 1e-7) {
+Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-7) {
   Vector x = x0;
   Real λ = 10;
 
@@ -250,7 +173,7 @@ Vector gradientDescent(const Model& M, const Vector& x0, Real ε = 1e-7) {
   return x;
 }
 
-Vector findMinimum(const Model& M, const Vector& x0, Real ε = 1e-5) {
+Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
   Vector x = x0;
   Real λ = 100;
 
@@ -274,7 +197,7 @@ Vector findMinimum(const Model& M, const Vector& x0, Real ε = 1e-5) {
   return x;
 }
 
-Vector findSaddle(const Model& M, const Vector& x0, Real ε = 1e-12) {
+Vector findSaddle(const QuadraticModel& M, const Vector& x0, Real ε = 1e-12) {
   Vector x = x0;
   Vector dx, g;
   Matrix m;
@@ -289,7 +212,7 @@ Vector findSaddle(const Model& M, const Vector& x0, Real ε = 1e-12) {
   return x;
 }
 
-Vector metropolisSweep(const Model& M, const Vector& x0, Real β, Rng& r, unsigned sweeps = 1, Real δ = 1) {
+Vector metropolisSweep(const QuadraticModel& M, const Vector& x0, Real β, Rng& r, unsigned sweeps = 1, Real δ = 1) {
   Vector x = x0;
   Real H = M.getHamiltonian(x);
 
@@ -322,6 +245,49 @@ Vector metropolisSweep(const Model& M, const Vector& x0, Real β, Rng& r, unsign
   }
 
   return x;
+}
+
+Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k, unsigned m) {
+  Vector σ = Vector::Zero(M.N);
+  unsigned axis = r.variate<unsigned, std::uniform_int_distribution>(0, M.N - 1);
+  σ(axis) = sqrt(M.N / k);
+
+  for (unsigned i = 0; i < k; i++) {
+    auto [H, dH] = M.getHamGrad(σ);
+//    Matrix mx = projectionOperator(σ);
+
+    /*
+    Matrix hessH = mx.transpose() * ddH * mx;
+
+    Vector v(M.N);
+    for (Real& vi : v) {
+      vi = r.variate<Real,std::normal_distribution>();
+    }
+    v = makeTangent(v, σ);
+    Real L = hessH.norm();
+    for (unsigned j = 0; j < m; j++) {
+      Vector vNew = (hessH + sqrt(L) * Matrix::Identity(M.N, M.N)) * v;
+      vNew = makeTangent(vNew, σ);
+      vNew = vNew / vNew.norm();
+      if ((v - vNew).norm() < 1e-6) {
+        std::cerr << "Stopped approximation after " << m << " steps" << std::endl;
+        v = vNew;
+        break;
+      }
+      v = vNew;
+    }
+
+    if (v.dot(dH) < 0) {
+      v = -v;
+    }
+    */
+
+    Vector v = dH / dH.norm();
+
+    σ += sqrt(M.N/k) * v;
+  }
+
+  return normalize(σ);
 }
 
 int main(int argc, char* argv[]) {
@@ -374,7 +340,7 @@ int main(int argc, char* argv[]) {
   Vector x = Vector::Zero(N);
   x(0) = sqrt(N);
 
-  std::cout << N << " " << α << " " << β;
+//  std::cout << N << " " << α << " " << β;
 
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
@@ -383,6 +349,10 @@ int main(int argc, char* argv[]) {
     }
     x = findMinimum(leastSquares, x);
     std::cout << " " << leastSquares.getHamiltonian(x) / N << std::flush;
+    QuadraticModel leastSquares2(N, M, r, σ, A, J);
+    Vector σ = subagAlgorithm(leastSquares2, r, N, 15);
+    σ = findMinimum(leastSquares2, σ);
+    std::cout << " " << leastSquares2.getHamiltonian(σ) / N << std::endl;
   }
 
   std::cout << std::endl;
