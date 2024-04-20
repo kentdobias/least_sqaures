@@ -73,17 +73,17 @@ public:
     for (unsigned k = 0; k < N; k++) {
       for (unsigned j = k; j < N; j++) {
         for (unsigned i = 0; i < M; i++) {
-          ssym1(J, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2) * μ3 / N);
+          ssym1(J, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2 * μ3) / N);
         }
       }
     }
 
     for (Real& Aij : A.reshaped()) {
-      Aij = r.variate<Real, std::normal_distribution>(0, μ2 / sqrt(N));
+      Aij = r.variate<Real, std::normal_distribution>(0, sqrt(μ2 / N));
     }
 
     for (Real& bi : b) {
-      bi = r.variate<Real, std::normal_distribution>(0, μ1);
+      bi = r.variate<Real, std::normal_distribution>(0, sqrt(μ1));
     }
   }
 
@@ -153,15 +153,14 @@ Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-7
 
     while(
       xNew = normalize(x + λ * g),
-      std::tie(HNew, gNew) = M.getHamGrad(xNew),
+      HNew = M.getHamiltonian(xNew),
       HNew < H && λ > ε
     ) {
       λ /= 1.5;
     }
 
     x = xNew;
-    H = HNew;
-    g = gNew;
+    std::tie(H, g) = M.getHamGrad(xNew);
 
     λ *= 2;
   }
@@ -184,9 +183,9 @@ Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
       x = xNew;
       std::tie(H, g, m) = M.hamGradHess(xNew);
 
-      λ /= 2;
+      λ /= 1.5;
     } else {
-      λ *= 1.5;
+      λ *= 1.25;
     }
   }
 
@@ -214,13 +213,11 @@ int main(int argc, char* argv[]) {
   Real σ = 1;
   Real A = 1;
   Real J = 1;
-  Real β = 1;
-  unsigned sweeps = 10;
   unsigned samples = 10;
 
   int opt;
 
-  while ((opt = getopt(argc, argv, "N:a:s:A:J:b:S:n:")) != -1) {
+  while ((opt = getopt(argc, argv, "N:a:s:A:J:n:")) != -1) {
     switch (opt) {
     case 'N':
       N = (unsigned)atof(optarg);
@@ -237,12 +234,6 @@ int main(int argc, char* argv[]) {
     case 'J':
       J = atof(optarg);
       break;
-    case 'b':
-      β = atof(optarg);
-      break;
-    case 'S':
-      sweeps = atoi(optarg);
-      break;
     case 'n':
       samples = atoi(optarg);
       break;
@@ -258,19 +249,15 @@ int main(int argc, char* argv[]) {
   Vector x = Vector::Zero(N);
   x(0) = sqrt(N);
 
-//  std::cout << N << " " << α << " " << β;
-
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
     x = findMinimum(leastSquares, x);
-    std::cout << " " << leastSquares.getHamiltonian(x) / N << std::flush;
+    std::cout << leastSquares.getHamiltonian(x) / N << std::flush;
     QuadraticModel leastSquares2(N, M, r, σ, A, J);
     Vector σ = subagAlgorithm(leastSquares2, r, N, 15);
     σ = findMinimum(leastSquares2, σ);
     std::cout << " " << leastSquares2.getHamiltonian(σ) / N << std::endl;
   }
-
-  std::cout << std::endl;
 
   return 0;
 }
