@@ -225,14 +225,16 @@ int main(int argc, char* argv[]) {
   x(0) = sqrt(N);
 
   for (unsigned sample = 0; sample < samples; sample++) {
-    QuadraticModel ls(N, M, r, σ², μA, μJ);
-    Vector xGD = gradientAscent(ls, x);
-    std::cout << ls.getHamiltonian(xGD) / N << " " << ls.maxEigenvalue(xGD) << " ";
+    QuadraticModel* ls = new QuadraticModel(N, M, r, σ², μA, μJ);
+    Vector xGD = gradientAscent(*ls, x);
+    std::cout << ls->getHamiltonian(xGD) / N << " " << ls->maxEigenvalue(xGD) << " ";
+    delete ls;
 
-    ls = QuadraticModel(N, M, r, σ², μA, μJ);
-    Vector xMP = subagAlgorithm(ls, r, N);
-    xMP = gradientAscent(ls, xMP);
-    std::cout << ls.getHamiltonian(xMP) / N << " " << ls.maxEigenvalue(xMP) << std::endl;
+    ls = new QuadraticModel(N, M, r, σ², μA, μJ);
+    Vector xMP = subagAlgorithm(*ls, r, N);
+    xMP = gradientAscent(*ls, xMP);
+    std::cout << ls->getHamiltonian(xMP) / N << " " << ls->maxEigenvalue(xMP) << std::endl;
+    delete ls;
   }
 
   return 0;
