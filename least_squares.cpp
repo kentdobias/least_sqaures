@@ -113,70 +113,50 @@ public:
     return {H, ∇H};
   }
 
-  std::tuple<Real, Vector, Matrix> getHamGradHess(const Vector& x) const {
+  Matrix getHess(const Vector& x) const {
     auto [H, ∂H, ∂∂H] = H_∂H_∂∂H(x);
 
-    Vector ∇H = makeTangent(∂H, x);
-    Matrix HessH = ∂∂H + (2 * x - (∂H + ∂∂H * x) / N) * x.transpose()
-      - (x.dot(∂H) / N) * Matrix::Identity(N, N);
+    Matrix P = Matrix::Identity(N, N) - x * x.transpose() / x.squaredNorm();
+    Matrix HessH = P * ∂∂H * P.transpose() - (x.dot(∂H) / N) * Matrix::Identity(N, N);
 
-    return {H, ∇H, HessH};
+    return HessH;
   }
 
   Vector spectrum(const Vector& x) const {
-    Matrix hessH;
-    std::tie(std::ignore, std::ignore, hessH) = getHamGradHess(x);
-    Eigen::EigenSolver<Matrix> eigenS(hessH);
+    Matrix HessH  = getHess(x);
+    Eigen::EigenSolver<Matrix> eigenS(HessH);
     return eigenS.eigenvalues().real();
+  }
+
+  Real maximumEigenvalue(const Vector& x) const {
+    return spectrum(x).maxCoeff();
   }
 };
 
-Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-7) {
+Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-13) {
   Vector x = x0;
-  Real λ = 10;
+  Real α = 1;
+  Real m, H;
+  Vector ∇H;
 
-  auto [H, ∇H] = M.getHamGrad(x);
-
-  while (∇H.norm() / M.N > ε && λ > ε) {
+  while (
+    std::tie(H, ∇H) = M.getHamGrad(x),
+    m = ∇H.squaredNorm(),
+    m / M.N > ε
+  ) {
     Real HNew;
-    Vector xNew, gNew;
+    Vector xNew;
 
     while(
-      xNew = normalize(x + λ * ∇H),
+      xNew = normalize(x + α * ∇H),
       HNew = M.getHamiltonian(xNew),
-      HNew < H && λ > ε
+      HNew < H + 0.5 * α * m
     ) {
-      λ /= 1.5;
+      α /= 2;
     }
 
     x = xNew;
-    std::tie(H, ∇H) = M.getHamGrad(xNew);
-
-    λ *= 2;
-  }
-
-  return x;
-}
-
-Vector levenbergMarquardt(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
-  Vector x = x0;
-  Real λ = 100;
-
-  auto [H, ∇H, HessH] = M.getHamGradHess(x0);
-
-  while (λ * ε < 1) {
-    Vector Δx = (HessH - λ * (Matrix)HessH.diagonal().cwiseAbs().asDiagonal()).partialPivLu().solve(∇H);
-    Vector xNew = normalize(x - makeTangent(Δx, x));
-    Real HNew = M.getHamiltonian(xNew);
-
-    if (HNew > H) {
-      x = xNew;
-      std::tie(H, ∇H, HessH) = M.getHamGradHess(xNew);
-
-      λ /= 1.5;
-    } else {
-      λ *= 1.25;
-    }
+    α *= 1.25;
   }
 
   return x;
@@ -232,7 +212,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  unsigned M = (unsigned)(α * N);
+  unsigned M = std::round(α * N);
 
   Rng r;
 
@@ -241,13 +221,13 @@ int main(int argc, char* argv[]) {
 
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
-    x = gradientDescent(leastSquares, x);
-    std::cout << leastSquares.getHamiltonian(x) / N;
+    Vector xGD = gradientDescent(leastSquares, x);
+    std::cout << leastSquares.getHamiltonian(xGD) / N << " " << leastSquares.maximumEigenvalue(xGD) << " ";
 
     leastSquares = QuadraticModel(N, M, r, σ, A, J);
-    x = subagAlgorithm(leastSquares, r, N);
-    x = gradientDescent(leastSquares, x);
-    std::cout << " " << leastSquares.getHamiltonian(x) / N << std::endl;
+    Vector xMP = subagAlgorithm(leastSquares, r, N);
+    xMP = gradientDescent(leastSquares, xMP);
+    std::cout << leastSquares.getHamiltonian(xMP) / N << " " << leastSquares.maximumEigenvalue(xMP) << std::endl;
   }
 
   return 0;
