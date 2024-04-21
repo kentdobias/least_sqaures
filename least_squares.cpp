@@ -158,7 +158,7 @@ Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-7
   return x;
 }
 
-Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
+Vector levenbergMarquardt(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
   Vector x = x0;
   Real λ = 100;
 
@@ -182,7 +182,7 @@ Vector findMinimum(const QuadraticModel& M, const Vector& x0, Real ε = 1e-5) {
   return x;
 }
 
-Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k, unsigned m) {
+Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k) {
   Vector σ = Vector::Zero(M.N);
   unsigned axis = r.variate<unsigned, std::uniform_int_distribution>(0, M.N - 1);
   σ(axis) = sqrt(M.N / k);
@@ -243,10 +243,11 @@ int main(int argc, char* argv[]) {
     QuadraticModel leastSquares(N, M, r, σ, A, J);
     x = gradientDescent(leastSquares, x);
     std::cout << leastSquares.getHamiltonian(x) / N;
-    QuadraticModel leastSquares2(N, M, r, σ, A, J);
-    Vector σ = subagAlgorithm(leastSquares2, r, N, 15);
-    σ = gradientDescent(leastSquares2, σ);
-    std::cout << " " << leastSquares2.getHamiltonian(σ) / N << std::endl;
+
+    leastSquares = QuadraticModel(N, M, r, σ, A, J);
+    x = subagAlgorithm(leastSquares, r, N);
+    x = gradientDescent(leastSquares, x);
+    std::cout << " " << leastSquares.getHamiltonian(x) / N << std::endl;
   }
 
   return 0;
