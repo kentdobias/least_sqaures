@@ -71,7 +71,7 @@ public:
   unsigned N;
   unsigned M;
 
-  QuadraticModel(unsigned N, unsigned M, Rng& r, Real σ², Real μA, Real μJ) : J(M, N, N), A(M, N), b(M), N(N), M(M) {
+  QuadraticModel(unsigned N, unsigned M, Real σ², Real μA, Real μJ, Rng& r) : J(M, N, N), A(M, N), b(M), N(N), M(M) {
     Eigen::StaticSGroup<Eigen::Symmetry<1,2>> sym23;
 
     for (unsigned k = 0; k < N; k++) {
@@ -153,16 +153,14 @@ Vector gradientAscent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-13
   return x;
 }
 
-Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k) {
-  Vector σ = Vector::Zero(M.N);
-  unsigned axis = r.variate<unsigned, std::uniform_int_distribution>(0, M.N - 1);
-  σ(axis) = sqrt(M.N / k);
+Vector subagAlgorithm(const QuadraticModel& M, const Vector& x0) {
+  Vector σ = x0 / x0.norm();
 
-  for (unsigned i = 0; i < k; i++) {
+  for (unsigned i = 0; i < M.N; i++) {
     Vector ∇H = M.getGradient(σ);
     Vector v = ∇H / ∇H.norm();
 
-    σ += sqrt(M.N/k) * v;
+    σ += v;
   }
 
   return normalize(σ);
@@ -213,13 +211,13 @@ int main(int argc, char* argv[]) {
   std::cout << std::setprecision(15);
 
   for (unsigned sample = 0; sample < samples; sample++) {
-    QuadraticModel* ls = new QuadraticModel(N, M, r, σ², μA, μJ);
+    QuadraticModel* ls = new QuadraticModel(N, M, σ², μA, μJ, r);
     Vector xGD = gradientAscent(*ls, x);
     std::cout << ls->getHamiltonian(xGD) / N << " " << ls->maxEigenvalue(xGD) << " ";
     delete ls;
 
-    ls = new QuadraticModel(N, M, r, σ², μA, μJ);
-    Vector xMP = subagAlgorithm(*ls, r, N);
+    ls = new QuadraticModel(N, M, σ², μA, μJ, r);
+    Vector xMP = subagAlgorithm(*ls, x);
     xMP = gradientAscent(*ls, xMP);
     std::cout << ls->getHamiltonian(xMP) / N << " " << ls->maxEigenvalue(xMP) << std::endl;
     delete ls;
