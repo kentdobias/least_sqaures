@@ -36,20 +36,8 @@ Vector normalize(const Vector& x) {
   return x * sqrt(x.size() / x.squaredNorm());
 }
 
-Vector makeTangent(const Vector& v, const Vector& x) {
-  return v - (v.dot(x) / x.squaredNorm()) * x;
-}
-
-Real HFromV(const Vector& V) {
-  return 0.5 * V.squaredNorm();
-}
-
 Vector ∂HFromV∂V(const Vector& V, const Matrix& ∂V) {
   return V.transpose() * ∂V;
-}
-
-Vector ∇HFromV∂Vx(const Vector& V, const Matrix& ∂V, const Vector& x) {
-  return makeTangent(∂HFromV∂V(V, ∂V), x);
 }
 
 Vector VFromABJx(const Vector& b, const Matrix& A, const Matrix& Jx, const Vector& x) {
@@ -104,17 +92,14 @@ public:
   }
 
   Real getHamiltonian(const Vector& x) const {
-    return HFromV(VFromABJx(b, A, J * x, x));
+    Vector V = VFromABJx(b, A, J * x, x);
+    return 0.5 * V.squaredNorm();
   }
 
   Vector getGradient(const Vector& x) const {
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
-    return ∇HFromV∂Vx(V, ∂V, x);
-  }
-
-  std::tuple<Real, Vector> getHamGrad(const Vector& x) const {
-    auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
-    return {HFromV(V), ∇HFromV∂Vx(V, ∂V, x)};
+    Vector ∂H = ∂HFromV∂V(V, ∂V);
+    return ∂H - (∂H.dot(x) / x.squaredNorm()) * x;
   }
 
   Matrix getHessian(const Vector& x) const {
