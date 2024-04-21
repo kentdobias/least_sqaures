@@ -2,6 +2,7 @@
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
 #include <eigen3/unsupported/Eigen/CXX11/TensorSymmetry>
 #include <getopt.h>
+#include <iomanip>
 
 #include "pcg-cpp/include/pcg_random.hpp"
 #include "randutils/randutils.hpp"
@@ -223,6 +224,8 @@ int main(int argc, char* argv[]) {
 
   Vector x = Vector::Zero(N);
   x(0) = sqrt(N);
+
+  std::cout << std::setprecision(15);
 
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel* ls = new QuadraticModel(N, M, r, σ², μA, μJ);
