@@ -117,8 +117,8 @@ public:
     auto [H, ∂H, ∂∂H] = H_∂H_∂∂H(x);
 
     Vector ∇H = makeTangent(∂H, x);
-    Matrix HessH = ∂∂H - (∂H * x.transpose() + x.dot(∂H) * Matrix::Identity(N, N)
-        + (∂∂H * x) * x.transpose()) / (Real)N  + 2.0 * x * x.transpose();
+    Matrix HessH = ∂∂H + (2 * x - (∂H + ∂∂H * x) / N) * x.transpose()
+      - (x.dot(∂H) / N) * Matrix::Identity(N, N);
 
     return {H, ∇H, HessH};
   }
