@@ -47,6 +47,10 @@ Vector ∂HFromV∂V(const Vector& V, const Matrix& ∂V) {
   return V.transpose() * ∂V;
 }
 
+Vector ∇HFromV∂Vx(const Vector& V, const Matrix& ∂V, const Vector& x) {
+  return makeTangent(∂HFromV∂V(V, ∂V), x);
+}
+
 Vector VFromABJx(const Vector& b, const Matrix& A, const Matrix& Jx, const Vector& x) {
   return b + (A + 0.5 * Jx) * x;
 }
@@ -65,14 +69,13 @@ private:
     return {V, ∂V, J};
   }
 
-  std::tuple<Real, Vector, Matrix> H_∂H_∂∂H(const Vector& x) const {
+  std::tuple<Vector, Matrix> ∂H_∂∂H(const Vector& x) const {
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
 
-    Real H = HFromV(V);
     Vector ∂H = ∂HFromV∂V(V, ∂V);
     Matrix ∂∂H = V.transpose() * ∂∂V + ∂V.transpose() * ∂V;
 
-    return {H, ∂H, ∂∂H};
+    return {∂H, ∂∂H};
   }
 
 public:
@@ -103,18 +106,23 @@ public:
     return HFromV(VFromABJx(b, A, J * x, x));
   }
 
+  Vector getGradient(const Vector& x) const {
+    auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
+
+    return ∇HFromV∂Vx(V, ∂V, x);
+  }
+
   std::tuple<Real, Vector> getHamGrad(const Vector& x) const {
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
 
     Real H = HFromV(V);
-    Vector ∂H = ∂HFromV∂V(V, ∂V);
-    Vector ∇H = makeTangent(∂H, x);
+    Vector ∇H = ∇HFromV∂Vx(V, ∂V, x);
 
     return {H, ∇H};
   }
 
-  Matrix getHess(const Vector& x) const {
-    auto [H, ∂H, ∂∂H] = H_∂H_∂∂H(x);
+  Matrix getHessian(const Vector& x) const {
+    auto [∂H, ∂∂H] = ∂H_∂∂H(x);
 
     Matrix P = Matrix::Identity(N, N) - x * x.transpose() / x.squaredNorm();
     Matrix HessH = P * ∂∂H * P.transpose() - (x.dot(∂H) / N) * Matrix::Identity(N, N);
@@ -123,7 +131,7 @@ public:
   }
 
   Vector spectrum(const Vector& x) const {
-    Matrix HessH  = getHess(x);
+    Matrix HessH  = getHessian(x);
     Eigen::EigenSolver<Matrix> eigenS(HessH);
     return eigenS.eigenvalues().real();
   }
@@ -136,11 +144,12 @@ public:
 Vector gradientAscent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-13) {
   Vector x = x0;
   Real α = 1;
-  Real m, H;
+  Real H = M.getHamiltonian(x0);
+  Real m;
   Vector ∇H;
 
   while (
-    std::tie(H, ∇H) = M.getHamGrad(x),
+    ∇H = M.getGradient(x),
     m = ∇H.squaredNorm(),
     m / M.N > ε
   ) {
@@ -156,6 +165,7 @@ Vector gradientAscent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-13
     }
 
     x = xNew;
+    H = HNew;
     α *= 1.25;
   }
 
@@ -168,7 +178,7 @@ Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k) {
   σ(axis) = sqrt(M.N / k);
 
   for (unsigned i = 0; i < k; i++) {
-    auto [H, ∇H] = M.getHamGrad(σ);
+    Vector ∇H = M.getGradient(σ);
     Vector v = ∇H / ∇H.norm();
 
     σ += sqrt(M.N/k) * v;
