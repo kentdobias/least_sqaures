@@ -17,7 +17,7 @@ class Tensor : public Eigen::Tensor<Real, 3> {
 
 public:
   Matrix operator*(const Vector& x) const {
-    const std::array<Eigen::IndexPair<int>, 1> ip20 = {Eigen::IndexPair<int>(2, 0)};
+    std::array<Eigen::IndexPair<int>, 1> ip20 = {Eigen::IndexPair<int>(2, 0)};
     const Eigen::Tensor<Real, 1> xT = Eigen::TensorMap<const Eigen::Tensor<Real, 1>>(x.data(), x.size());
     const Eigen::Tensor<Real, 2> JxT = contract(xT, ip20);
     return Eigen::Map<const Matrix>(JxT.data(), dimension(0), dimension(1));
@@ -25,14 +25,14 @@ public:
 };
 
 Matrix operator*(const Eigen::Matrix<Real, 1, Eigen::Dynamic>& x, const Tensor& J) {
-  const std::array<Eigen::IndexPair<int>, 1> ip00 = {Eigen::IndexPair<int>(0, 0)};
+  std::array<Eigen::IndexPair<int>, 1> ip00 = {Eigen::IndexPair<int>(0, 0)};
   const Eigen::Tensor<Real, 1> xT = Eigen::TensorMap<const Eigen::Tensor<Real, 1>>(x.data(), x.size());
   const Eigen::Tensor<Real, 2> JxT = J.contract(xT, ip00);
   return Eigen::Map<const Matrix>(JxT.data(), J.dimension(1), J.dimension(2));
 }
 
 Vector normalize(const Vector& x) {
-  return x * sqrt((Real)x.size() / x.squaredNorm());
+  return x * sqrt(x.size() / x.squaredNorm());
 }
 
 Vector makeTangent(const Vector& v, const Vector& x) {
@@ -82,23 +82,23 @@ public:
   unsigned N;
   unsigned M;
 
-  QuadraticModel(unsigned N, unsigned M, Rng& r, Real μ1, Real μ2, Real μ3) : J(M, N, N), A(M, N), b(M), N(N), M(M) {
+  QuadraticModel(unsigned N, unsigned M, Rng& r, Real σ², Real μA, Real μJ) : J(M, N, N), A(M, N), b(M), N(N), M(M) {
     Eigen::StaticSGroup<Eigen::Symmetry<1,2>> sym23;
 
     for (unsigned k = 0; k < N; k++) {
       for (unsigned j = k; j < N; j++) {
         for (unsigned i = 0; i < M; i++) {
-          sym23(J, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2 * μ3) / N);
+          sym23(J, i, j, k) = r.variate<Real, std::normal_distribution>(0, sqrt(2 * μJ) / N);
         }
       }
     }
 
     for (Real& Aij : A.reshaped()) {
-      Aij = r.variate<Real, std::normal_distribution>(0, sqrt(μ2 / N));
+      Aij = r.variate<Real, std::normal_distribution>(0, sqrt(μA / N));
     }
 
     for (Real& bi : b) {
-      bi = r.variate<Real, std::normal_distribution>(0, sqrt(μ1));
+      bi = r.variate<Real, std::normal_distribution>(0, sqrt(σ²));
     }
   }
 
@@ -108,17 +108,12 @@ public:
 
   Vector getGradient(const Vector& x) const {
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
-
     return ∇HFromV∂Vx(V, ∂V, x);
   }
 
   std::tuple<Real, Vector> getHamGrad(const Vector& x) const {
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
-
-    Real H = HFromV(V);
-    Vector ∇H = ∇HFromV∂Vx(V, ∂V, x);
-
-    return {H, ∇H};
+    return {HFromV(V), ∇HFromV∂Vx(V, ∂V, x)};
   }
 
   Matrix getHessian(const Vector& x) const {
