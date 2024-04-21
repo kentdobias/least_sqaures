@@ -43,7 +43,7 @@ Real HFromV(const Vector& V) {
   return 0.5 * V.squaredNorm();
 }
 
-Vector dHFromVdV(const Vector& V, const Matrix& ∂V) {
+Vector ∂HFromV∂V(const Vector& V, const Matrix& ∂V) {
   return V.transpose() * ∂V;
 }
 
@@ -69,7 +69,7 @@ private:
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
 
     Real H = HFromV(V);
-    Vector ∂H = dHFromVdV(V, ∂V);
+    Vector ∂H = ∂HFromV∂V(V, ∂V);
     Matrix ∂∂H = V.transpose() * ∂∂V + ∂V.transpose() * ∂V;
 
     return {H, ∂H, ∂∂H};
@@ -104,10 +104,10 @@ public:
   }
 
   std::tuple<Real, Vector> getHamGrad(const Vector& x) const {
-    auto [V, dV, ddV] = V_∂V_∂∂V(x);
+    auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
 
     Real H = HFromV(V);
-    Vector ∂H = dHFromVdV(V, dV);
+    Vector ∂H = ∂HFromV∂V(V, ∂V);
     Vector ∇H = makeTangent(∂H, x);
 
     return {H, ∇H};
@@ -128,12 +128,12 @@ public:
     return eigenS.eigenvalues().real();
   }
 
-  Real maximumEigenvalue(const Vector& x) const {
+  Real maxEigenvalue(const Vector& x) const {
     return spectrum(x).maxCoeff();
   }
 };
 
-Vector gradientDescent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-13) {
+Vector gradientAscent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-13) {
   Vector x = x0;
   Real α = 1;
   Real m, H;
@@ -180,9 +180,9 @@ Vector subagAlgorithm(const QuadraticModel& M, Rng& r, unsigned k) {
 int main(int argc, char* argv[]) {
   unsigned N = 10;
   Real α = 1;
-  Real σ = 1;
-  Real A = 1;
-  Real J = 1;
+  Real σ² = 1;
+  Real μA = 1;
+  Real μJ = 1;
   unsigned samples = 10;
 
   int opt;
@@ -196,13 +196,13 @@ int main(int argc, char* argv[]) {
       α = atof(optarg);
       break;
     case 's':
-      σ = atof(optarg);
+      σ² = atof(optarg);
       break;
     case 'A':
-      A = atof(optarg);
+      μA = atof(optarg);
       break;
     case 'J':
-      J = atof(optarg);
+      μJ = atof(optarg);
       break;
     case 'n':
       samples = atoi(optarg);
@@ -220,14 +220,14 @@ int main(int argc, char* argv[]) {
   x(0) = sqrt(N);
 
   for (unsigned sample = 0; sample < samples; sample++) {
-    QuadraticModel leastSquares(N, M, r, σ, A, J);
-    Vector xGD = gradientDescent(leastSquares, x);
-    std::cout << leastSquares.getHamiltonian(xGD) / N << " " << leastSquares.maximumEigenvalue(xGD) << " ";
+    QuadraticModel ls(N, M, r, σ², μA, μJ);
+    Vector xGD = gradientAscent(ls, x);
+    std::cout << ls.getHamiltonian(xGD) / N << " " << ls.maxEigenvalue(xGD) << " ";
 
-    leastSquares = QuadraticModel(N, M, r, σ, A, J);
-    Vector xMP = subagAlgorithm(leastSquares, r, N);
-    xMP = gradientDescent(leastSquares, xMP);
-    std::cout << leastSquares.getHamiltonian(xMP) / N << " " << leastSquares.maximumEigenvalue(xMP) << std::endl;
+    ls = QuadraticModel(N, M, r, σ², μA, μJ);
+    Vector xMP = subagAlgorithm(ls, r, N);
+    xMP = gradientAscent(ls, xMP);
+    std::cout << ls.getHamiltonian(xMP) / N << " " << ls.maxEigenvalue(xMP) << std::endl;
   }
 
   return 0;
