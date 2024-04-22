@@ -118,8 +118,8 @@ public:
 
 Vector gradientAscent(const QuadraticModel& M, const Vector& x₀, Real ε = 1e-13) {
   Vector xₜ = x₀;
-  Real α = 1;
   Real Hₜ = M.H(x₀);
+  Real α = 1;
   Real m;
   Vector ∇H;
 
@@ -127,8 +127,8 @@ Vector gradientAscent(const QuadraticModel& M, const Vector& x₀, Real ε = 1e-
     ∇H = M.∇H(xₜ), m = ∇H.squaredNorm(),
     m / M.N > ε
   ) {
-    Real Hₜ₊₁;
     Vector xₜ₊₁;
+    Real Hₜ₊₁;
 
     while(
       xₜ₊₁ = normalize(xₜ + α * ∇H), Hₜ₊₁ = M.H(xₜ₊₁),
