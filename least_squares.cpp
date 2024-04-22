@@ -1,11 +1,12 @@
-#include <eigen3/Eigen/Dense>
-#include <eigen3/unsupported/Eigen/CXX11/Tensor>
-#include <eigen3/unsupported/Eigen/CXX11/TensorSymmetry>
 #include <getopt.h>
 #include <iomanip>
 
 #include "pcg-cpp/include/pcg_random.hpp"
 #include "randutils/randutils.hpp"
+
+#include "eigen/Eigen/Dense"
+#include "eigen/unsupported/Eigen/CXX11/Tensor"
+#include "eigen/unsupported/Eigen/CXX11/TensorSymmetry"
 
 using Rng = randutils::random_generator<pcg32>;
 
