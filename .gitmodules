@@ -4,3 +4,6 @@
 [submodule "pcg-cpp"]
 	path = pcg-cpp
 	url = https://github.com/imneme/pcg-cpp
+[submodule "eigen"]
+	path = eigen
+	url = https://gitlab.com/libeigen/eigen/
