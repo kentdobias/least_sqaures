@@ -54,16 +54,13 @@ private:
     Matrix Jx = J * x;
     Vector V = VFromABJx(b, A, Jx, x);
     Matrix ∂V = A + Jx;
-
     return {V, ∂V, J};
   }
 
   std::tuple<Vector, Matrix> ∂H_∂∂H(const Vector& x) const {
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
-
     Vector ∂H = ∂HFromV∂V(V, ∂V);
     Matrix ∂∂H = V.transpose() * ∂∂V + ∂V.transpose() * ∂V;
-
     return {∂H, ∂∂H};
   }
 
@@ -91,73 +88,68 @@ public:
     }
   }
 
-  Real getHamiltonian(const Vector& x) const {
+  Real H(const Vector& x) const {
     Vector V = VFromABJx(b, A, J * x, x);
     return 0.5 * V.squaredNorm();
   }
 
-  Vector getGradient(const Vector& x) const {
+  Vector ∇H(const Vector& x) const {
     auto [V, ∂V, ∂∂V] = V_∂V_∂∂V(x);
     Vector ∂H = ∂HFromV∂V(V, ∂V);
     return ∂H - (∂H.dot(x) / x.squaredNorm()) * x;
   }
 
-  Matrix getHessian(const Vector& x) const {
+  Matrix HessH(const Vector& x) const {
     auto [∂H, ∂∂H] = ∂H_∂∂H(x);
-
     Matrix P = Matrix::Identity(N, N) - x * x.transpose() / x.squaredNorm();
-    Matrix HessH = P * ∂∂H * P.transpose() - (x.dot(∂H) / N) * Matrix::Identity(N, N);
-
-    return HessH;
+    return P * ∂∂H * P.transpose() - (x.dot(∂H) / N) * Matrix::Identity(N, N);
   }
 
   Vector spectrum(const Vector& x) const {
-    Matrix HessH  = getHessian(x);
-    Eigen::EigenSolver<Matrix> eigenS(HessH);
+    Matrix hessH  = HessH(x);
+    Eigen::EigenSolver<Matrix> eigenS(hessH);
     return eigenS.eigenvalues().real();
   }
 
-  Real maxEigenvalue(const Vector& x) const {
+  Real λmax(const Vector& x) const {
     return spectrum(x).maxCoeff();
   }
 };
 
-Vector gradientAscent(const QuadraticModel& M, const Vector& x0, Real ε = 1e-13) {
-  Vector x = x0;
+Vector gradientAscent(const QuadraticModel& M, const Vector& x₀, Real ε = 1e-13) {
+  Vector xₜ = x₀;
   Real α = 1;
-  Real H = M.getHamiltonian(x0);
+  Real Hₜ = M.H(x₀);
   Real m;
   Vector ∇H;
 
   while (
-    ∇H = M.getGradient(x),
-    m = ∇H.squaredNorm(),
+    ∇H = M.∇H(xₜ), m = ∇H.squaredNorm(),
     m / M.N > ε
   ) {
-    Real HNew;
-    Vector xNew;
+    Real Hₜ₊₁;
+    Vector xₜ₊₁;
 
     while(
-      xNew = normalize(x + α * ∇H),
-      HNew = M.getHamiltonian(xNew),
-      HNew < H + 0.5 * α * m
+      xₜ₊₁ = normalize(xₜ + α * ∇H), Hₜ₊₁ = M.H(xₜ₊₁),
+      Hₜ₊₁ < Hₜ + 0.5 * α * m
     ) {
       α /= 2;
     }
 
-    x = xNew;
-    H = HNew;
+    xₜ = xₜ₊₁;
+    Hₜ = Hₜ₊₁;
     α *= 1.25;
   }
 
-  return x;
+  return xₜ;
 }
 
-Vector subagAlgorithm(const QuadraticModel& M, const Vector& x0) {
-  Vector σ = x0 / x0.norm();
+Vector messagePassing(const QuadraticModel& M, const Vector& x₀) {
+  Vector σ = x₀ / x₀.norm();
 
   for (unsigned i = 0; i < M.N; i++) {
-    Vector ∇H = M.getGradient(σ);
+    Vector ∇H = M.∇H(σ);
     Vector v = ∇H / ∇H.norm();
 
     σ += v;
@@ -213,13 +205,13 @@ int main(int argc, char* argv[]) {
   for (unsigned sample = 0; sample < samples; sample++) {
     QuadraticModel* ls = new QuadraticModel(N, M, σ², μA, μJ, r);
     Vector xGD = gradientAscent(*ls, x);
-    std::cout << ls->getHamiltonian(xGD) / N << " " << ls->maxEigenvalue(xGD) << " ";
+    std::cout << ls->H(xGD) / N << " " << ls->λmax(xGD) << " ";
     delete ls;
 
     ls = new QuadraticModel(N, M, σ², μA, μJ, r);
-    Vector xMP = subagAlgorithm(*ls, x);
+    Vector xMP = messagePassing(*ls, x);
     xMP = gradientAscent(*ls, xMP);
-    std::cout << ls->getHamiltonian(xMP) / N << " " << ls->maxEigenvalue(xMP) << std::endl;
+    std::cout << ls->H(xMP) / N << " " << ls->λmax(xMP) << std::endl;
     delete ls;
   }
 
