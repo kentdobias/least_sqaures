@@ -131,7 +131,7 @@ Vector gradientAscent(const QuadraticModel& M, const Vector& x₀, Real ε = 1e-
     Vector xₜ₊₁;
     Real Hₜ₊₁;
 
-    while(
+    while (
       xₜ₊₁ = normalize(xₜ + α * ∇H), Hₜ₊₁ = M.H(xₜ₊₁),
       Hₜ₊₁ < Hₜ + 0.5 * α * m
     ) {
